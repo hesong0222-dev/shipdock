@@ -1,0 +1,12 @@
+{
+  "name": "shipdock",
+  "version": "0.1.0",
+  "description": "Generate and check Homebrew, Scoop and winget manifests straight from a GitHub Release, with no config file.",
+  "type": "module",
+  "bin": { "shipdock": "bin/shipdock.mjs" },
+  "files": ["bin", "src", "README.md", "LICENSE"],
+  "scripts": { "test": "node --test" },
+  "engines": { "node": ">=18" },
+  "keywords": ["homebrew", "scoop", "winget", "github-releases", "packaging", "cli", "release"],
+  "license": "Apache-2.0"
+}
