@@ -35,16 +35,16 @@ When an asset is missing, `plan` says what that costs you, for example
 ## Why
 
 If you publish a CLI as release assets, getting it into Homebrew, Scoop and winget means writing three manifest formats by hand and keeping their URLs and hashes right.
-The closest existing tool is the `prebuilt` builder in GoReleaser Pro (paid). It packages binaries you already built, but you configure it in `.goreleaser.yaml`: a `prebuilt.path` template to the binaries on local disk, plus `goos`/`goarch` targets, which have no defaults. It does not read assets from an existing GitHub release.
+The closest existing tool is the `prebuilt` builder in GoReleaser Pro (paid). It packages binaries you already built, but you configure it in `.goreleaser.yaml`: a `prebuilt.path` template to the binaries on local disk, plus `goos`/`goarch` targets, which have no defaults. Its documentation does not describe a mode that reads assets from an already published GitHub release (we checked the current docs page; we did not test the product).
 shipdock starts from the release that is already published. There is nothing to configure: it works from the asset names and what is inside the archives.
 
 ## Use
 
 ```bash
-git clone <this repo> && cd shipdock
-node bin/shipdock.mjs plan owner/repo [--tag v1.2.3] [--json]   # what each manager can get
-node bin/shipdock.mjs generate owner/repo --out dist/ [--tag v1.2.3]
-node bin/shipdock.mjs verify dist/ [--brew]
+npx github:hesong0222-dev/shipdock plan owner/repo [--tag v1.2.3] [--json]   # what each manager can get
+npx github:hesong0222-dev/shipdock generate owner/repo --out dist/ [--tag v1.2.3]
+npx github:hesong0222-dev/shipdock verify dist/ [--brew]
+# or clone and run: node bin/shipdock.mjs ...   (an npm package is not published yet)
 ```
 
 Needs Node 18+. Auth uses `GITHUB_TOKEN` / `GH_TOKEN`, or your `gh` login if you have one (60 requests/hour without a token).
