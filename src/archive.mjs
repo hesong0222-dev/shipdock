@@ -11,10 +11,11 @@ export async function download(url) {
 
 export const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
-// Entries of a tar.gz via the system tar: names from -tzf, modes from the first column of -tzvf (same order).
-function tarEntries(buf) {
+// Entries of a tar.gz/tar.xz via the system tar: names from -tf, modes from the first column of -tvf (same order).
+function tarEntries(buf, format) {
+  const z = format === 'tar.xz' ? 'J' : 'z';
   const run = (flags) => execFileSync('tar', [flags, '-'], { input: buf, encoding: 'utf8', maxBuffer: 64 << 20 }).split('\n').filter(Boolean);
-  const names = run('-tzf'), long = run('-tzvf');
+  const names = run(`-t${z}f`), long = run(`-t${z}vf`);
   return names.map((path, i) => {
     const mode = (long[i] || '').split(/\s+/)[0];
     return { path, dir: mode[0] === 'd' || path.endsWith('/'), link: mode[0] === 'l', exec: mode[0] === '-' && /x/.test(mode.slice(1)) };
@@ -39,33 +40,43 @@ function zipEntries(buf) {
 }
 
 export function listArchive(buf, format) {
-  return format === 'zip' ? zipEntries(buf) : tarEntries(buf);
+  return format === 'zip' ? zipEntries(buf) : tarEntries(buf, format);
 }
 
 // Find the executable: a single top-level directory is reported as `root` (Homebrew strips it,
-// Scoop needs it as extract_dir). Prefer an executable named like the repo, else the only one.
+// Scoop needs it as extract_dir). Prefer an executable named like the repo, else the only one,
+// else a file named like the repo plus a platform suffix ("tool-aarch64-macos"), even when the
+// archive lost its executable bit (`chmod` is then set so the formula restores it).
 export function findBinary(entries, name, windows) {
   const files = entries.map((e) => ({ ...e, path: e.path.replace(/^\.\//, '') })).filter((e) => e.path && !e.dir && !e.link);
   const tops = new Set(files.map((f) => f.path.split('/')[0]));
   const root = tops.size === 1 && files.every((f) => f.path.includes('/')) ? [...tops][0] : '';
   const cands = files.filter((f) => (windows ? /\.exe$/i.test(f.path) : f.exec));
   const base = (f) => f.path.split('/').pop().replace(/\.exe$/i, '').toLowerCase();
-  const hit = cands.find((f) => base(f) === name.toLowerCase()) || (cands.length === 1 ? cands[0] : null);
-  return { root, bin: hit ? hit.path.slice(root ? root.length + 1 : 0) : null };
+  const n = name.toLowerCase();
+  const suffixed = (f) => base(f).startsWith(n + '-') || base(f).startsWith(n + '_');
+  let hit = cands.find((f) => base(f) === n) || (cands.length === 1 ? cands[0] : null);
+  if (!hit) {
+    const loose = files.filter((f) => (windows ? /\.exe$/i.test(f.path) : !/\.[a-z]\w*$/i.test(f.path)) && suffixed(f));
+    if (loose.length === 1) hit = loose[0];
+  }
+  return { root, bin: hit ? hit.path.slice(root ? root.length + 1 : 0) : null, chmod: !!hit && !windows && !hit.exec };
 }
 
 // Hash and inspect one classified asset. Uses the API `digest` when present; downloads
 // archives to look inside, and anything without a digest to hash it.
 export async function inspect(asset, name) {
   const digest = asset.digest && asset.digest.startsWith('sha256:') ? asset.digest.slice(7) : null;
-  const isArchive = ['tar.gz', 'tgz', 'zip'].includes(asset.format);
-  if (!isArchive && digest) return { sha256: digest, root: '', bin: null, warnings: [] };
+  const isArchive = ['tar.gz', 'tgz', 'tar.xz', 'zip'].includes(asset.format);
+  // A bare executable is installed under its own file name; downloads keep no executable bit.
+  const bare = asset.format === 'binary' ? { bin: asset.name, chmod: true } : { bin: null };
+  if (!isArchive && digest) return { sha256: digest, root: '', ...bare, warnings: [] };
   if (asset.size > MAX_DOWNLOAD) {
-    return { sha256: digest, root: '', bin: null, warnings: [`${asset.name} is over 300 MB; not downloaded${digest ? '' : ', no hash available'}`] };
+    return { sha256: digest, root: '', ...bare, warnings: [`${asset.name} is over 300 MB; not downloaded${digest ? '' : ', no hash available'}`] };
   }
   const buf = await download(asset.url);
   const hash = sha256(buf);
   if (digest && digest !== hash) throw new Error(`${asset.name}: downloaded sha256 ${hash} does not match API digest ${digest}`);
-  if (!isArchive) return { sha256: hash, root: '', bin: null, warnings: [] };
+  if (!isArchive) return { sha256: hash, root: '', ...bare, warnings: [] };
   return { sha256: hash, ...findBinary(listArchive(buf, asset.format), name, asset.os === 'windows'), warnings: [] };
 }

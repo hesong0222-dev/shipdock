@@ -10,9 +10,13 @@ const cleanDesc = (d) => (d || '').replace(/:[a-z0-9_+-]+:/g, '').replace(/\s+/g
 // (cut at the last clause boundary, else word boundary).
 export function brewDesc(desc, name) {
   let d = cleanDesc(desc).replace(/\.$/, '').replace(/^(a|an|the)\s+/i, '');
-  if (d.toLowerCase().startsWith(name.toLowerCase() + ' ')) d = d.slice(name.length + 1);
+  // Same test as brew's desc cop: the name without dashes, with an optional space/dash between letters.
+  const esc = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const lead = new RegExp(`^${[...name.replace(/-/g, '')].map(esc).join('[\\s\\-]?')}\\b[\\s:,-]*`, 'i');
+  const named = lead.test(d) && !!d.replace(lead, '');
+  if (named) d = d.replace(lead, '');
   d = d.charAt(0).toUpperCase() + d.slice(1);
-  if (d.length < 80) return { desc: d, shortened: false };
+  if (d.length < 80) return { desc: d, shortened: named };
   const head = d.slice(0, 80);
   const cut = head.match(/^(.*\S)(?:,| while| that| which| with| -| —|;)\s/) || head.match(/^(.*\S)\s/);
   return { desc: cut ? cut[1] : head.slice(0, 79), shortened: true };
@@ -35,17 +39,50 @@ function chooseBin(paths, fallback) {
   return { bin: found[0], todo: `TODO: executable path differs between archives (${found.join(', ')}); using "${found[0]}".` };
 }
 
+// The command a file is installed as: "tool-aarch64-macos" (repo name plus a platform suffix) becomes "tool".
+export const cmdName = (bin, name) => {
+  const b = bin.split('/').pop().replace(/\.exe$/i, '');
+  return b.toLowerCase().startsWith(name.toLowerCase() + '-') || b.toLowerCase().startsWith(name.toLowerCase() + '_') ? name : b;
+};
+
+// Executables named per platform ("tool-aarch64-macos", "tool-linux64") get one install line per
+// platform, all installed as their shared leading name ("tool"; version-like parts are not kept).
+// Returns that command, or null when the paths are not per-platform names of one tool.
+export function perPlatform(paths) {
+  if (paths.length < 2 || !paths.every(Boolean) || new Set(paths).size < 2) return null;
+  const parts = paths.map((p) => p.split('/').pop().replace(/\.exe$/i, '').split(/([-_])/));
+  const out = [];
+  for (let i = 0; parts.every((t) => i < t.length && t[i] === parts[0][i]); i++) {
+    if (i % 2 === 0 && /^v?\d/i.test(parts[0][i])) break;
+    out.push(parts[0][i]);
+  }
+  while (out.length && /^[-_]$/.test(out[out.length - 1])) out.pop();
+  return out.length && out.join('').length > 1 ? out.join('') : null;
+}
+
+const installLines = (i, cmd, ind) => [
+  ...(i.chmod ? [`${ind}chmod 0755, "${i.bin}"`] : []),
+  `${ind}bin.install "${i.bin}"${i.bin.split('/').pop() === cmd ? '' : ` => "${cmd}"`}`,
+];
+
 export function renderFormula(meta, mgr, info) {
   const u = used(mgr, info);
-  const { bin, todo } = chooseBin(Object.values(u).map((x) => x.i.bin), meta.name);
+  const split = perPlatform(Object.values(u).map((x) => x.i.bin));
+  const { bin, todo } = split ? { bin: Object.values(u)[0].i.bin, todo: null } : chooseBin(Object.values(u).map((x) => x.i.bin), meta.name);
+  const cmd = split || cmdName(bin, meta.name);
+  const chmod = Object.values(u).some((x) => x.i.chmod && x.i.bin === bin);
   const src = (x, ind) => [`${ind}url "${x.a.url}"`, `${ind}sha256 "${x.i.sha256}"`];
   const d = brewDesc(meta.desc, meta.name);
   const L = [`# ${HEADER}`];
   if (todo) L.push(`# ${todo}`);
-  if (d.shortened) L.push('# TODO: description was shortened to fit Homebrew\'s 80-character limit; reword it.');
+  if (d.shortened) L.push('# TODO: description was shortened for Homebrew (80-character limit, no leading formula name); reword it.');
+  if (!d.desc) L.push('# TODO: the repo has no description; write one (brew audit rejects an empty desc).');
   L.push(`class ${className(meta.name)} < Formula`, `  desc "${d.desc.replace(/"/g, '\\"')}"`, `  homepage "${meta.homepage}"`);
-  // brew audit --strict rejects a `version` it can already read from the URLs.
-  if (!Object.values(u).every((x) => x.a.name.includes(meta.version))) L.push(`  version "${meta.version}"`);
+  // brew audit --strict rejects a `version` it can already read from the URLs
+  // (the file name, or a /releases/download/v1.2.3/ path).
+  const ver = meta.version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const inUrl = (x) => x.a.name.includes(meta.version) || (/^\d+(\.\d+)+$/.test(meta.version) && new RegExp(`/releases/download/(?:[rvV]_?)?${ver}/`).test(x.a.url));
+  if (!Object.values(u).every(inUrl)) L.push(`  version "${meta.version}"`);
   if (meta.license) L.push(`  license "${meta.license}"`);
   for (const [os, block] of [['darwin', 'on_macos'], ['linux', 'on_linux']]) {
     const arm = u[`${os}-arm64`], intel = u[`${os}-amd64`];
@@ -58,7 +95,28 @@ export function renderFormula(meta, mgr, info) {
     }
     L.push('  end');
   }
-  L.push('', '  def install', `    bin.install "${bin}"`, '  end', '', '  test do', `    system bin/"${bin.split('/').pop()}", "--version"`, '  end', 'end', '');
+  L.push('', '  def install');
+  if (!split) L.push(...installLines({ bin, chmod }, cmd, '    '));
+  else {
+    // brew audit wants `if OS.mac?` / `if Hardware::CPU.arm?` here, not on_macos/on_arm blocks.
+    for (const [os, cond] of [['darwin', 'OS.mac?'], ['linux', 'OS.linux?']]) {
+      const arm = u[`${os}-arm64`], intel = u[`${os}-amd64`];
+      if (!arm && !intel) continue;
+      // One architecture only: brew audit wants a single merged condition.
+      if (!arm || !intel) {
+        L.push(`    if ${cond} && Hardware::CPU.${arm ? 'arm' : 'intel'}?`, ...installLines((arm || intel).i, cmd, '      '), '    end');
+        continue;
+      }
+      L.push(`    if ${cond}`);
+      if (arm.a === intel.a) L.push(...installLines(arm.i, cmd, '      '));
+      else {
+        if (arm) L.push('      if Hardware::CPU.arm?', ...installLines(arm.i, cmd, '        '), '      end');
+        if (intel) L.push('      if Hardware::CPU.intel?', ...installLines(intel.i, cmd, '        '), '      end');
+      }
+      L.push('    end');
+    }
+  }
+  L.push('  end', '', '  test do', `    system bin/"${cmd}", "--version"`, '  end', 'end', '');
   return L.join('\n');
 }
 
@@ -66,7 +124,10 @@ const winBin = (x, name) => (x.a.format === 'exe' ? `${name}.exe` : x.i.bin);
 
 export function renderScoop(meta, mgr, info) {
   const u = used(mgr, info);
-  const { bin, todo } = chooseBin(Object.values(u).map((x) => winBin(x, meta.name)), `${meta.name}.exe`);
+  const split = perPlatform(Object.values(u).map((x) => winBin(x, meta.name)));
+  const { bin, todo } = split ? { bin: null, todo: null } : chooseBin(Object.values(u).map((x) => winBin(x, meta.name)), `${meta.name}.exe`);
+  // Scoop's [path, alias] form exposes "tool-x86_64-windows.exe" as "tool".
+  const scoopBin = (b) => (cmdName(b, meta.name) === b.split('/').pop().replace(/\.exe$/i, '') ? b : [[b, cmdName(b, meta.name)]]);
   const arch = {}, auto = {};
   for (const [slot, key] of [['windows-amd64', '64bit'], ['windows-arm64', 'arm64']]) {
     const x = u[slot];
@@ -76,10 +137,11 @@ export function renderScoop(meta, mgr, info) {
     arch[key] = { url: x.a.url + frag, hash: x.i.sha256 };
     auto[key] = { url: tmpl(x.a.url) + frag };
     if (x.i.root) { arch[key].extract_dir = x.i.root; auto[key].extract_dir = tmpl(x.i.root); }
+    if (split) arch[key].bin = [[winBin(x, meta.name), split]];
   }
   const m = { '##': todo ? [HEADER, todo] : HEADER, version: meta.version, description: cleanDesc(meta.desc) || meta.name, homepage: meta.homepage };
-  if (meta.license) m.license = meta.license;
-  Object.assign(m, { architecture: arch, bin, checkver: 'github', autoupdate: { architecture: auto } });
+  m.license = meta.license || meta.licenseName || 'Unknown'; // required by Scoop's schema
+  Object.assign(m, { architecture: arch, ...(split ? {} : { bin: scoopBin(bin) }), checkver: 'github', autoupdate: { architecture: auto } });
   return JSON.stringify(m, null, 4) + '\n';
 }
 
@@ -105,7 +167,7 @@ export function renderWinget(meta, mgr, info) {
     const bin = x.i.bin || `${meta.name}.exe`;
     L.push('  NestedInstallerType: portable', '  NestedInstallerFiles:',
       `  - RelativeFilePath: ${q([x.i.root, bin].filter(Boolean).join('/').replace(/\//g, '\\'))}`,
-      `    PortableCommandAlias: ${q(bin.split('/').pop().replace(/\.exe$/i, ''))}`);
+      `    PortableCommandAlias: ${q(cmdName(bin, meta.name))}`);
   }
   if (type === 'portable') L.push('  Commands:', `  - ${q(meta.name)}`);
   L.push('ManifestType: singleton', 'ManifestVersion: 1.6.0', '');

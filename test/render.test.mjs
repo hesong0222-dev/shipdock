@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { plan } from '../src/classify.mjs';
-import { renderFormula, renderScoop, renderWinget, brewDesc, className } from '../src/render.mjs';
+import { renderFormula, renderScoop, renderWinget, brewDesc, className, perPlatform } from '../src/render.mjs';
 
 const release = JSON.parse(readFileSync(new URL('./fixtures/release.json', import.meta.url), 'utf8'));
 const p = plan('acme/tool', release);
@@ -73,4 +73,23 @@ test('brew desc follows audit rules', () => {
   const long = brewDesc('ripgrep recursively searches directories for a regex pattern while respecting your gitignore', 'ripgrep');
   assert.deepEqual(long, { desc: 'Recursively searches directories for a regex pattern', shortened: true });
   assert.equal(className('git-lfs'), 'GitLfs');
+});
+
+test('per-platform executable names: one install line per platform, renamed to the shared name', () => {
+  assert.equal(perPlatform(['zigscient-aarch64-macos', 'zigscient-x86_64-linux']), 'zigscient');
+  assert.equal(perPlatform(['browserpass-darwin-arm64', 'browserpass-linux64']), 'browserpass');
+  assert.equal(perPlatform(['xreferee-1.1.1-osx-arm64', 'xreferee-1.1.1-linux-x86_64']), 'xreferee');
+  assert.equal(perPlatform(['tool', 'tool']), null);
+  const assets = ['aarch64-macos', 'x86_64-macos', 'x86_64-linux'].map((s) => ({ name: `zs-${s}.zip`, size: 1, digest: `sha256:${'b'.repeat(64)}`, browser_download_url: `https://github.com/a/zs/releases/download/0.17.0/zs-${s}.zip` }));
+  const q = plan('a/zs', { tag_name: '0.17.0', assets });
+  const info = Object.fromEntries(assets.map((a) => [a.name, { sha256: 'b'.repeat(64), root: '', bin: a.name.replace('.zip', ''), chmod: a.name.includes('macos') }]));
+  const rb = renderFormula({ ...meta, name: 'zs', version: '0.17.0' }, q.managers.homebrew, info);
+  assert.match(rb, /    if OS\.mac\?\n      if Hardware::CPU\.arm\?\n        chmod 0755, "zs-aarch64-macos"\n        bin\.install "zs-aarch64-macos" => "zs"\n      end/);
+  assert.match(rb, /    if OS\.linux\? && Hardware::CPU\.intel\?\n      bin\.install "zs-x86_64-linux" => "zs"\n    end/);
+  assert.match(rb, /system bin\/"zs", "--version"/);
+  assert.doesNotMatch(rb, /TODO|^\s*version "/m, 'the /releases/download/0.17.0/ path already carries the version');
+});
+
+test('brew desc drops a leading formula name the way brew audit matches it', () => {
+  assert.deepEqual(brewDesc('Browserpass native client app', 'browserpass-native'), { desc: 'Client app', shortened: true });
 });

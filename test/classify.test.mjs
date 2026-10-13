@@ -73,3 +73,13 @@ test('plan on the fixture: per-manager coverage and honest missing notes', () =>
   assert.equal(p.managers.winget.status, 'ready');
   assert.ok(p.notCovered.some((x) => /code signing/.test(x)));
 });
+
+test('tar.xz, bare executables and <os>64 names are classified (S1 field run)', () => {
+  assert.deepEqual(pick(c('sed-aarch64-apple-darwin.tar.xz')), { os: 'darwin', arch: 'arm64', format: 'tar.xz' });
+  assert.deepEqual(pick(c('xreferee-1.1.1-osx-arm64')), { os: 'darwin', arch: 'arm64', format: 'binary' });
+  assert.deepEqual(pick(c('git-ai-linux-x64')), { os: 'linux', arch: 'amd64', format: 'binary' });
+  assert.equal(c('install.sh').skip, 'unknown format');
+  assert.deepEqual(pick(c('browserpass-darwin64-3.1.2.tar.gz')), { os: 'darwin', arch: 'amd64', format: 'tar.gz' });
+  assert.deepEqual(pick(c('browserpass-linux64-3.1.2.tar.gz')), { os: 'linux', arch: 'amd64', format: 'tar.gz' });
+  assert.deepEqual(pick(c('elinks-0.20.0-win64.zip')), { os: 'windows', arch: 'amd64', format: 'zip' });
+});

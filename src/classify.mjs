@@ -2,8 +2,10 @@
 // which asset each package manager would use.
 
 const FORMATS = [
-  ['tar.gz', /\.tar\.gz$/], ['tgz', /\.tgz$/], ['zip', /\.zip$/], ['deb', /\.deb$/], ['rpm', /\.rpm$/],
+  ['tar.gz', /\.tar\.gz$/], ['tgz', /\.tgz$/], ['tar.xz', /\.tar\.xz$/], ['zip', /\.zip$/], ['deb', /\.deb$/], ['rpm', /\.rpm$/],
   ['msi', /\.msi$/], ['exe', /\.exe$/], ['dmg', /\.dmg$/], ['pkg', /\.pkg$/], ['AppImage', /\.appimage$/],
+  // A bare executable: no file extension at all ("tool-1.0-linux-x86_64").
+  ['binary', /^[^.]*(\.\d[^.]*)*$/],
 ];
 
 const SKIP = [
@@ -15,7 +17,7 @@ const SKIP = [
 
 // Match a token that is not glued to other letters/digits ("arm64" in "linux_arm64.tar.gz", not "farm64").
 const tok = (alts) => new RegExp(`(^|[^a-z0-9])(${alts})(?=[^a-z0-9]|$)`);
-const AMD64 = tok('x86_64|x86-64|amd64|x64');
+const AMD64 = tok('x86_64|x86-64|amd64|x64|darwin64|macos64|linux64|windows64|win64');
 const ARM64 = tok('arm64|aarch64|arm64e');
 const UNIVERSAL = tok('universal2?|all');
 const WIN_GNU = tok('gnu|gnullvm|mingw');
@@ -43,7 +45,7 @@ export function classifyAsset(asset) {
 
 export const MANAGERS = {
   homebrew: {
-    label: 'Homebrew', formats: ['tar.gz', 'tgz', 'zip'],
+    label: 'Homebrew', formats: ['tar.gz', 'tgz', 'tar.xz', 'zip', 'binary'],
     slots: [['darwin', 'arm64'], ['darwin', 'amd64'], ['linux', 'arm64'], ['linux', 'amd64']],
     effect: (os, arch) => `Homebrew formula will have no Hardware::CPU.${arch === 'arm64' ? 'arm?' : 'intel?'} block in ${os === 'darwin' ? 'on_macos' : 'on_linux'}`,
   },
