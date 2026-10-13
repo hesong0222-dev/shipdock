@@ -1,5 +1,19 @@
 import { execFileSync } from 'node:child_process';
 
+// Message for a 403/429 that is a rate limit (primary: remaining 0; secondary: retry-after), else null.
+export function rateLimitMessage(status, headers, now = Date.now(), hasToken = false) {
+  const h = (k) => (typeof headers.get === 'function' ? headers.get(k) : headers[k]);
+  if (status !== 403 && status !== 429) return null;
+  const retry = Number(h('retry-after'));
+  const reset = Number(h('x-ratelimit-reset'));
+  let secs;
+  if (retry > 0) secs = retry;
+  else if (h('x-ratelimit-remaining') === '0' && reset > 0) secs = Math.max(reset - now / 1000, 0);
+  else return null;
+  const mins = Math.max(Math.ceil(secs / 60), 1);
+  return `GitHub API rate limit reached. Try again in about ${mins} min${hasToken ? '' : ', or set GITHUB_TOKEN (5000 requests/hour instead of 60)'}.`;
+}
+
 let cachedToken;
 function token() {
   if (cachedToken !== undefined) return cachedToken;
@@ -18,7 +32,7 @@ export async function api(path) {
   if (t) headers.authorization = `Bearer ${t}`;
   const res = await fetch('https://api.github.com' + path, { headers });
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`GitHub API ${res.status} for ${path}${res.status === 403 ? ' (rate limit? set GITHUB_TOKEN)' : ''}`);
+  if (!res.ok) throw new Error(rateLimitMessage(res.status, res.headers, Date.now(), !!t) || `GitHub API ${res.status} for ${path}`);
   return res.json();
 }
 
