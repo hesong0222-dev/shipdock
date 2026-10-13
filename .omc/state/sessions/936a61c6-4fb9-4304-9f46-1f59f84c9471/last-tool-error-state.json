@@ -1,7 +1,0 @@
-{
-  "tool_name": "Bash",
-  "tool_input_preview": "{\"command\":\"cd /tmp && python3 - <<'EOF'\\nimport re,html\\nh=open('/tmp/gr_prebuilt.html',encoding='utf8',errors='ignore').read()\\nt=re.sub(r'<script.*?</script>|<style.*?</style>','',h,flags=re.S)\\nt=...",
-  "error": "Exit code 1\n... elemetry traces, and more! GoReleaser Getting Started Documentation More resources Updates Sponsors Pro CTRL K GitHub CTRL K Getting Started Documentation General Project Name Metadata Dist folder Artifacts Includes Templates Template Files En\ncount Pro mentions 3\n to build your binaries in different machines due to CGO You want to build using a pre-existing Makefile or other tool You want to speed up the build by running several builds in parallel in different machines In any ca...",
-  "timestamp": "2026-10-12T14:15:24.458Z",
-  "retry_count": 1
-}
